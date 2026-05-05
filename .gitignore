@@ -43,3 +43,6 @@ next-env.d.ts
 # Arquivos sensíveis e de desenvolvimento
 acessos.md
 prompt_gerenciador_financeiro.md
+
+Extrato-*.csv
+Extrato-*.ofx

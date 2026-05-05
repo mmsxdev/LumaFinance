@@ -190,42 +190,80 @@ function ImportTransactionsForm({ onClose }: { onClose: () => void }) {
       const text = event.target?.result as string
       let transactions: any[] = []
 
+      // Palavras-chave para filtrar movimentações internas (CDB, investimentos internos)
+      const INTERNAL_KEYWORDS = [
+        'aplicacao', 'aplicação', 'resgate', 'cdb', 'lci', 'lca',
+        'porquinho', 'porq obj', 'rendimento', 'iof'
+      ]
+      const isInternal = (desc: string) =>
+        INTERNAL_KEYWORDS.some(kw => desc.toLowerCase().includes(kw))
+
       try {
         if (ext === 'ofx') {
-          // Simple OFX regex parser
           const matches = text.match(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/g)
           if (matches) {
             transactions = matches.map(m => {
               const amtMatch = m.match(/<TRNAMT>([^\r\n<]+)/)
               const dateMatch = m.match(/<DTPOSTED>([^\r\n<]+)/)
               const memoMatch = m.match(/<MEMO>([^\r\n<]+)/)
-              if (amtMatch && dateMatch && memoMatch) {
-                const d = dateMatch[1]
+              const nameMatch = m.match(/<NAME>([^\r\n<]+)/)
+              if (amtMatch && dateMatch) {
+                const d = dateMatch[1].trim()
                 const dateStr = `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`
-                return { amount: parseFloat(amtMatch[1]), date: dateStr, description: memoMatch[1].trim(), accountId }
+                // Prefer NAME if available; fallback to MEMO
+                const rawDesc = (nameMatch?.[1] || memoMatch?.[1] || 'Transação').trim()
+                // Filter out internal CDB/investment moves
+                if (isInternal(rawDesc)) return null
+                return { amount: parseFloat(amtMatch[1]), date: dateStr, description: rawDesc, accountId }
               }
               return null
             }).filter(Boolean)
           }
         } else if (ext === 'csv') {
-          // Parse CSV
-          const result = Papa.parse(text, { header: true, skipEmptyLines: true })
+          // Detect separator: Banco Inter uses ";"
+          const isSemicolon = text.includes(';')
+          const delimiter = isSemicolon ? ';' : ','
+
+          // Banco Inter CSVs have 5 header lines before the real data header
+          // e.g. " Extrato Conta Corrente ", "Conta ;190078960", "Período ;...", "Saldo ;...", ""
+          let csvText = text
+          if (isSemicolon) {
+            const lines = text.split('\n')
+            // Find the line that starts with "Data" (the real header)
+            const headerIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('data'))
+            if (headerIdx > 0) csvText = lines.slice(headerIdx).join('\n')
+          }
+
+          const result = Papa.parse(csvText, { header: true, skipEmptyLines: true, delimiter })
+          const headers = result.meta.fields || []
+
           transactions = result.data.map((row: any) => {
-            // Very naive mapping - assumes columns like Date, Description, Amount
-            const date = row['Date'] || row['Data'] || row['date']
-            const desc = row['Description'] || row['Descrição'] || row['Historico'] || row['description']
-            const amtRaw = row['Amount'] || row['Valor'] || row['amount']
-            const amount = typeof amtRaw === 'string' ? parseFloat(amtRaw.replace(',', '.')) : Number(amtRaw)
-            if (date && desc && !isNaN(amount)) {
-              // Convert DD/MM/YYYY to YYYY-MM-DD if necessary
-              let formattedDate = date
-              if (date.includes('/')) {
-                const parts = date.split('/')
-                if (parts[0].length === 2) formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`
-              }
-              return { amount, date: formattedDate, description: desc, accountId }
+            // Flexible column name matching (BR banks vary a lot)
+            const dateKey = headers.find((h: string) => /data/i.test(h)) || ''
+            const descKey = headers.find((h: string) => /hist[oó]rico/i.test(h)) || ''
+            const descDetailKey = headers.find((h: string) => /descri[cç]/i.test(h)) || ''
+            const amtKey = headers.find((h: string) => /valor/i.test(h) && !/saldo/i.test(h)) || ''
+
+            const date = row[dateKey]?.trim()
+            const hist = row[descKey]?.trim() || ''
+            const descDetail = row[descDetailKey]?.trim() || ''
+            const desc = descDetail ? `${hist} - ${descDetail}` : hist
+            const amtRaw = row[amtKey]
+            const amount = typeof amtRaw === 'string'
+              ? parseFloat(amtRaw.replace(/\./g, '').replace(',', '.'))
+              : Number(amtRaw)
+
+            if (!date || !desc || isNaN(amount)) return null
+            // Filter internal transactions
+            if (isInternal(desc)) return null
+
+            // Convert DD/MM/YYYY → YYYY-MM-DD
+            let formattedDate = date
+            if (date.includes('/')) {
+              const parts = date.split('/')
+              if (parts[0].length <= 2) formattedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`
             }
-            return null
+            return { amount, date: formattedDate, description: desc, accountId }
           }).filter(Boolean)
         }
 
