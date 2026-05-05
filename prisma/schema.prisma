@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  avatarUrl     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      BankAccount[]
+  budgets       Budget[]
+  goals         Goal[]
+}
+
+model BankAccount {
+  id              String      @id @default(cuid())
+  userId          String
+  institutionId   String
+  institutionName String
+  institutionColor String     @default("#888888")
+  type            AccountType
+  name            String
+  number          String?
+  agency          String?
+  balanceAmount   Decimal     @db.Decimal(15, 2)
+  balanceCurrency String      @default("BRL")
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  transactions    Transaction[]
+
+  @@index([userId])
+}
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+  CREDIT_CARD
+  INVESTMENT
+  SALARY
+}
+
+model Transaction {
+  id              String   @id @default(cuid())
+  accountId       String
+  description     String
+  cleanDescription String?
+  amount          Decimal  @db.Decimal(15, 2)
+  currency        String   @default("BRL")
+  date            DateTime
+  categoryId      String?
+  subcategory     String?
+  merchant        String?
+  type            TransactionType
+  status          TransactionStatus @default(COMPLETED)
+  isRecurring     Boolean  @default(false)
+  notes           String?
+  aiCategorized   Boolean  @default(false)
+  aiConfidence    Float?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  account         BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category        Category?   @relation(fields: [categoryId], references: [id])
+
+  @@index([accountId, date])
+  @@index([categoryId])
+}
+
+enum TransactionType {
+  DEBIT
+  CREDIT
+  TRANSFER
+  INVESTMENT
+  PIX
+  TED
+  BOLETO
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+model Category {
+  id           String    @id @default(cuid())
+  name         String    @unique
+  icon         String
+  color        String
+  type         CategoryType
+  isSystem     Boolean   @default(true)
+  keywords     String[]
+  parentId     String?
+  parent       Category? @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children     Category[] @relation("CategoryHierarchy")
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@index([type])
+}
+
+enum CategoryType {
+  INCOME
+  EXPENSE
+  TRANSFER
+  INVESTMENT
+}
+
+model Budget {
+  id         String   @id @default(cuid())
+  userId     String
+  categoryId String
+  amount     Decimal  @db.Decimal(15, 2)
+  period     BudgetPeriod @default(MONTHLY)
+  month      Int?
+  year       Int?
+  alertAt    Float    @default(0.8)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id])
+
+  @@unique([userId, categoryId, month, year])
+  @@index([userId])
+}
+
+enum BudgetPeriod {
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+model Goal {
+  id           String     @id @default(cuid())
+  userId       String
+  name         String
+  description  String?
+  targetAmount Decimal    @db.Decimal(15, 2)
+  currentAmount Decimal   @db.Decimal(15, 2) @default(0)
+  targetDate   DateTime?
+  icon         String     @default("🎯")
+  color        String     @default("#8B5CF6")
+  status       GoalStatus @default(IN_PROGRESS)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum GoalStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  PAUSED
+}

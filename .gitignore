@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Arquivos sensíveis e de desenvolvimento
+acessos.md
+prompt_gerenciador_financeiro.md
