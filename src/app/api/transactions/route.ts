@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
       accountId: body.accountId,
       description: body.description,
       amount: body.amount,
-      date: new Date(body.date),
+      date: new Date(body.date.includes('T') ? body.date : body.date + 'T12:00:00'),
       type: body.type || 'DEBIT',
       categoryId: body.categoryId || null,
       notes: body.notes || null,

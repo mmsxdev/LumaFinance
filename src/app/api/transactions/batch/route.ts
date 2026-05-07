@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
       accountId: t.accountId || defaultAccountId,
       description: t.description,
       amount: Number(t.amount),
-      date: new Date(t.date),
+      date: new Date(typeof t.date === 'string' && !t.date.includes('T') ? t.date + 'T12:00:00' : t.date),
       type: t.type || (Number(t.amount) >= 0 ? 'CREDIT' : 'DEBIT'),
       categoryId: t.categoryId || null,
       notes: t.notes || 'Importado via OFX/CSV',
