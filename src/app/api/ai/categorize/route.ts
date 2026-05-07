@@ -23,7 +23,13 @@ export async function POST(request: NextRequest) {
   const userId = await getUserId()
   if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { transactionIds } = await request.json()
+  let transactionIds: string[] | undefined
+  try {
+    const body = await request.json()
+    transactionIds = body?.transactionIds
+  } catch {
+    // Body vazio ou inválido — categorizar todas não-categorizadas
+  }
 
   // Get uncategorized transactions
   const where: any = {
