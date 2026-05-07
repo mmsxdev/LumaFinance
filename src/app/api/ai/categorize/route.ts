@@ -20,50 +20,51 @@ interface CategorizationResult {
 }
 
 export async function POST(request: NextRequest) {
-  const userId = await getUserId()
-  if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
-
-  let transactionIds: string[] | undefined
   try {
-    const body = await request.json()
-    transactionIds = body?.transactionIds
-  } catch {
-    // Body vazio ou inválido — categorizar todas não-categorizadas
-  }
+    const userId = await getUserId()
+    if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Get uncategorized transactions
-  const where: any = {
-    account: { userId },
-    aiCategorized: false,
-  }
-  if (transactionIds?.length) {
-    where.id = { in: transactionIds }
-  }
+    let transactionIds: string[] | undefined
+    try {
+      const body = await request.json()
+      transactionIds = body?.transactionIds
+    } catch {
+      // Body vazio — categorizar todas
+    }
 
-  const transactions = await prisma.transaction.findMany({
-    where,
-    take: 30,
-  })
+    // Get uncategorized transactions
+    const where: any = {
+      account: { userId },
+      aiCategorized: false,
+    }
+    if (transactionIds?.length) {
+      where.id = { in: transactionIds }
+    }
 
-  if (transactions.length === 0) {
-    return Response.json({ message: 'Nenhuma transação para categorizar', count: 0 })
-  }
+    const transactions = await prisma.transaction.findMany({
+      where,
+      take: 30,
+    })
 
-  const categories = await prisma.category.findMany()
+    if (transactions.length === 0) {
+      return Response.json({ message: 'Nenhuma transação para categorizar', count: 0 })
+    }
 
-  const categoryList = categories
-    .map(c => `- ID: "${c.id}" | Nome: "${c.name}" | Tipo: ${c.type} | Keywords: ${c.keywords.join(', ')}`)
-    .join('\n')
+    const categories = await prisma.category.findMany()
 
-  const txList = transactions
-    .map((tx, i) =>
-      `${i + 1}. ID: "${tx.id}" | Descrição: "${tx.description}" | Valor: ${Number(tx.amount) > 0 ? '+' : ''}R$ ${Math.abs(Number(tx.amount)).toFixed(2)} | Data: ${tx.date.toISOString().split('T')[0]}`
-    )
-    .join('\n')
+    const categoryList = categories
+      .map(c => `- ID: "${c.id}" | Nome: "${c.name}" | Tipo: ${c.type} | Keywords: ${c.keywords.join(', ')}`)
+      .join('\n')
 
-  const systemInstruction = `Você é um sistema de categorização de transações financeiras brasileiras. Retorne APENAS um array JSON válido.`
+    const txList = transactions
+      .map((tx, i) =>
+        `${i + 1}. ID: "${tx.id}" | Descrição: "${tx.description}" | Valor: ${Number(tx.amount) > 0 ? '+' : ''}R$ ${Math.abs(Number(tx.amount)).toFixed(2)} | Data: ${tx.date.toISOString().split('T')[0]}`
+      )
+      .join('\n')
 
-  const prompt = `Categorize as transações abaixo nas categorias disponíveis.
+    const systemInstruction = `Você é um sistema de categorização de transações financeiras brasileiras. Retorne APENAS um array JSON válido.`
+
+    const prompt = `Categorize as transações abaixo nas categorias disponíveis.
 
 CATEGORIAS:
 ${categoryList}
@@ -81,26 +82,41 @@ ${txList}
 Retorne array JSON:
 [{"transactionId": "id", "categoryId": "id-da-categoria", "cleanDescription": "Nome limpo", "merchant": "Estabelecimento", "confidence": 0.95}]`
 
-  try {
     const results = await generateStructuredResponse<CategorizationResult[]>(prompt, systemInstruction)
 
-    // Update transactions in DB
-    for (const result of results) {
-      await prisma.transaction.update({
-        where: { id: result.transactionId },
-        data: {
-          categoryId: result.categoryId,
-          cleanDescription: result.cleanDescription,
-          merchant: result.merchant,
-          aiCategorized: true,
-          aiConfidence: result.confidence,
-        },
-      })
+    if (!Array.isArray(results)) {
+      return Response.json({ error: 'IA retornou formato inválido', raw: String(results) }, { status: 500 })
     }
 
-    return Response.json({ message: 'Categorização concluída', count: results.length })
-  } catch (error) {
+    // Update transactions in DB — skip any that fail individually
+    let updated = 0
+    for (const result of results) {
+      try {
+        // Verify the categoryId exists
+        const catExists = categories.find(c => c.id === result.categoryId)
+        await prisma.transaction.update({
+          where: { id: result.transactionId },
+          data: {
+            categoryId: catExists ? result.categoryId : null,
+            cleanDescription: result.cleanDescription,
+            merchant: result.merchant,
+            aiCategorized: true,
+            aiConfidence: result.confidence,
+          },
+        })
+        updated++
+      } catch (e) {
+        console.error(`Failed to update tx ${result.transactionId}:`, e)
+      }
+    }
+
+    return Response.json({ message: 'Categorização concluída', count: updated })
+  } catch (error: any) {
     console.error('AI categorization error:', error)
-    return Response.json({ error: 'Erro na categorização' }, { status: 500 })
+    return Response.json({ 
+      error: 'Erro na categorização', 
+      details: error?.message || String(error),
+      stack: error?.stack?.split('\n').slice(0, 3)
+    }, { status: 500 })
   }
 }
