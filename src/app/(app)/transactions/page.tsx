@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAppStore } from '@/stores/app-store'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { useState, useRef } from 'react'
-import { Search, Plus, Sparkles, Loader2, Trash2, ArrowUpRight, ArrowDownRight, Upload, FileUp } from 'lucide-react'
+import { Search, Plus, Sparkles, Loader2, Trash2, ArrowUpRight, ArrowDownRight, Upload, FileUp, Check, RotateCcw, Filter } from 'lucide-react'
 import { toast } from 'sonner'
 import Papa from 'papaparse'
 
@@ -105,7 +105,7 @@ export default function TransactionsPage() {
 
       {/* Forms */}
       {showForm && <AddTransactionForm categories={categoriesData?.categories || []} onClose={() => setShowForm(false)} />}
-      {showImport && <ImportTransactionsForm onClose={() => setShowImport(false)} />}
+      {showImport && <ImportTransactionsForm categories={categoriesData?.categories || []} onClose={() => setShowImport(false)} />}
 
       {/* Transaction List */}
       <div className="card overflow-hidden">
@@ -167,16 +167,59 @@ export default function TransactionsPage() {
   )
 }
 
-function ImportTransactionsForm({ onClose }: { onClose: () => void }) {
+// Helper to dynamically recommend a category based on keywords
+const getSuggestedCategory = (description: string, categories: any[]) => {
+  const descLower = description.toLowerCase()
+  
+  // Keyword dictionary mapping category name patterns
+  const keywordMap: Record<string, string[]> = {
+    'Moradia': ['aluguel', 'condomínio', 'iptu', 'luz', 'energia', 'água', 'gás', 'internet', 'netflix', 'habitação'],
+    'Alimentação': ['supermercado', 'mercado', 'padaria', 'açougue', 'hortifruti', 'extra', 'carrefour', 'ifood', 'restaurante', 'lanche', 'pizza', 'burger', 'salgadinhos', 'pizzaria', 'deli'],
+    'Transporte': ['uber', '99', 'taxi', 'combustível', 'gasolina', 'estacionamento', 'pedágio', 'metro', 'ônibus', 'sitpass', 'viagem'],
+    'Saúde': ['farmácia', 'drogasil', 'consulta', 'médico', 'hospital', 'plano de saúde', 'exame', 'radiologika', 'raio-x', 'cabelo', 'pomada'],
+    'Lazer': ['cinema', 'teatro', 'show', 'spotify', 'prime video', 'disney', 'jogo', 'steam', 'bilhete', 'pecuaria'],
+    'Educação': ['escola', 'faculdade', 'curso', 'udemy', 'livro', 'mensalidade', 'alura'],
+    'Roupas': ['renner', 'riachuelo', 'zara', 'shein', 'roupa', 'calçado', 'tênis'],
+    'Pets': ['petshop', 'veterinário', 'ração', 'petz'],
+    'Finanças': ['tarifa', 'taxa', 'juros', 'seguro', 'anuidade', 'empréstimo', 'digio', 'neon', 'fatura'],
+    'Investimentos': ['tesouro', 'cdb', 'lci', 'lca', 'fundos', 'ações', 'previdência', 'aplicacao', 'aplicação', 'resgate', 'porquinho', 'porq obj', 'rendimento'],
+    'Salário': ['salário', 'pagamento', 'holerite', 'remuneração', 'portabilidade'],
+    'Freelance': ['freelance', 'projeto', 'consultoria', 'serviço']
+  }
+
+  for (const [catName, keywords] of Object.entries(keywordMap)) {
+    if (keywords.some(kw => descLower.includes(kw))) {
+      const match = categories.find(c => c.name.toLowerCase() === catName.toLowerCase())
+      if (match) return match
+    }
+  }
+
+  // Fallback to "Outros"
+  return categories.find(c => c.name === 'Outros') || categories[0] || null
+}
+
+function ImportTransactionsForm({ categories, onClose }: { categories: any[]; onClose: () => void }) {
   const queryClient = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
   const [accountId, setAccountId] = useState('')
+  const [parsedTransactions, setParsedTransactions] = useState<any[] | null>(null)
+  const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
+  const [searchQuery, setSearchQuery] = useState('')
+  const [filterType, setFilterType] = useState<'all' | 'no-investments' | 'investments-only' | 'credits' | 'debits'>('no-investments')
 
   const { data: accountsData } = useQuery({
     queryKey: ['accounts'],
     queryFn: async () => { const res = await fetch('/api/accounts'); return res.json() },
   })
+
+  // Palavras-chave para filtrar movimentações internas (CDB, investimentos internos)
+  const INTERNAL_KEYWORDS = [
+    'aplicacao', 'aplicação', 'resgate', 'cdb', 'lci', 'lca',
+    'porquinho', 'porq obj', 'rendimento', 'iof'
+  ]
+  const isInternal = (desc: string) =>
+    INTERNAL_KEYWORDS.some(kw => desc.toLowerCase().includes(kw))
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -190,14 +233,6 @@ function ImportTransactionsForm({ onClose }: { onClose: () => void }) {
       const text = event.target?.result as string
       let transactions: any[] = []
 
-      // Palavras-chave para filtrar movimentações internas (CDB, investimentos internos)
-      const INTERNAL_KEYWORDS = [
-        'aplicacao', 'aplicação', 'resgate', 'cdb', 'lci', 'lca',
-        'porquinho', 'porq obj', 'rendimento', 'iof'
-      ]
-      const isInternal = (desc: string) =>
-        INTERNAL_KEYWORDS.some(kw => desc.toLowerCase().includes(kw))
-
       try {
         if (ext === 'ofx') {
           const matches = text.match(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/g)
@@ -210,26 +245,19 @@ function ImportTransactionsForm({ onClose }: { onClose: () => void }) {
               if (amtMatch && dateMatch) {
                 const d = dateMatch[1].trim()
                 const dateStr = `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`
-                // Prefer NAME if available; fallback to MEMO
                 const rawDesc = (nameMatch?.[1] || memoMatch?.[1] || 'Transação').trim()
-                // Filter out internal CDB/investment moves
-                if (isInternal(rawDesc)) return null
                 return { amount: parseFloat(amtMatch[1]), date: dateStr, description: rawDesc, accountId }
               }
               return null
             }).filter(Boolean)
           }
         } else if (ext === 'csv') {
-          // Detect separator: Banco Inter uses ";"
           const isSemicolon = text.includes(';')
           const delimiter = isSemicolon ? ';' : ','
 
-          // Banco Inter CSVs have 5 header lines before the real data header
-          // e.g. " Extrato Conta Corrente ", "Conta ;190078960", "Período ;...", "Saldo ;...", ""
           let csvText = text
           if (isSemicolon) {
             const lines = text.split('\n')
-            // Find the line that starts with "Data" (the real header)
             const headerIdx = lines.findIndex(l => l.trim().toLowerCase().startsWith('data'))
             if (headerIdx > 0) csvText = lines.slice(headerIdx).join('\n')
           }
@@ -238,7 +266,6 @@ function ImportTransactionsForm({ onClose }: { onClose: () => void }) {
           const headers = result.meta.fields || []
 
           transactions = result.data.map((row: any) => {
-            // Flexible column name matching (BR banks vary a lot)
             const dateKey = headers.find((h: string) => /data/i.test(h)) || ''
             const descKey = headers.find((h: string) => /hist[oó]rico/i.test(h)) || ''
             const descDetailKey = headers.find((h: string) => /descri[cç]/i.test(h)) || ''
@@ -254,10 +281,7 @@ function ImportTransactionsForm({ onClose }: { onClose: () => void }) {
               : Number(amtRaw)
 
             if (!date || !desc || isNaN(amount)) return null
-            // Filter internal transactions
-            if (isInternal(desc)) return null
 
-            // Convert DD/MM/YYYY → YYYY-MM-DD
             let formattedDate = date
             if (date.includes('/')) {
               const parts = date.split('/')
@@ -269,17 +293,16 @@ function ImportTransactionsForm({ onClose }: { onClose: () => void }) {
 
         if (transactions.length === 0) throw new Error('Nenhuma transação encontrada ou formato não suportado.')
 
-        const res = await fetch('/api/transactions/batch', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ transactions })
+        setParsedTransactions(transactions)
+        
+        // Auto-select all by default except internal CDB/investment transactions (safe default)
+        const initialSelected = new Set<number>()
+        transactions.forEach((tx, idx) => {
+          if (!isInternal(tx.description)) {
+            initialSelected.add(idx)
+          }
         })
-        const data = await res.json()
-        if (data.error) throw new Error(data.error)
-
-        toast.success(`${data.count} transações importadas com sucesso!`)
-        queryClient.invalidateQueries({ queryKey: ['transactions'] })
-        queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-        onClose()
+        setSelectedIndices(initialSelected)
 
       } catch (err: any) {
         toast.error('Erro na importação: ' + err.message)
@@ -291,6 +314,307 @@ function ImportTransactionsForm({ onClose }: { onClose: () => void }) {
     reader.readAsText(file)
   }
 
+  const handleConfirmImport = async () => {
+    if (!parsedTransactions || selectedIndices.size === 0) return
+    setLoading(true)
+
+    try {
+      const transactionsToImport = parsedTransactions
+        .filter((_, idx) => selectedIndices.has(idx))
+        .map(tx => {
+          const suggested = getSuggestedCategory(tx.description, categories)
+          return {
+            ...tx,
+            accountId,
+            categoryId: suggested?.id || null
+          }
+        })
+
+      const res = await fetch('/api/transactions/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transactions: transactionsToImport })
+      })
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+
+      toast.success(`${data.count} transações importadas com sucesso!`)
+      queryClient.invalidateQueries({ queryKey: ['transactions'] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      onClose()
+    } catch (err: any) {
+      toast.error('Erro ao salvar transações: ' + err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleReset = () => {
+    setParsedTransactions(null)
+    setSelectedIndices(new Set())
+    setSearchQuery('')
+    setFilterType('no-investments')
+  }
+
+  // Filtering parsed list
+  const filteredList = parsedTransactions ? parsedTransactions.map((tx, idx) => ({ ...tx, idx })).filter(({ description, amount }) => {
+    if (searchQuery) {
+      const matchText = description.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                        String(amount).includes(searchQuery)
+      if (!matchText) return false
+    }
+
+    const internal = isInternal(description)
+    if (filterType === 'no-investments' && internal) return false
+    if (filterType === 'investments-only' && !internal) return false
+    if (filterType === 'credits' && amount < 0) return false
+    if (filterType === 'debits' && amount >= 0) return false
+
+    return true
+  }) : []
+
+  // Dynamic calculations
+  const totalSelectedCount = selectedIndices.size
+  let totalSelectedAmount = 0
+  let totalSelectedIncome = 0
+  let totalSelectedExpense = 0
+
+  if (parsedTransactions) {
+    parsedTransactions.forEach((tx, idx) => {
+      if (selectedIndices.has(idx)) {
+        totalSelectedAmount += tx.amount
+        if (tx.amount >= 0) {
+          totalSelectedIncome += tx.amount
+        } else {
+          totalSelectedExpense += Math.abs(tx.amount)
+        }
+      }
+    })
+  }
+
+  const handleSelectAllVisible = () => {
+    const newSelected = new Set(selectedIndices)
+    filteredList.forEach(({ idx }) => newSelected.add(idx))
+    setSelectedIndices(newSelected)
+  }
+
+  const handleDeselectAllVisible = () => {
+    const newSelected = new Set(selectedIndices)
+    filteredList.forEach(({ idx }) => newSelected.delete(idx))
+    setSelectedIndices(newSelected)
+  }
+
+  const toggleSelectIndex = (idx: number) => {
+    const newSelected = new Set(selectedIndices)
+    if (newSelected.has(idx)) {
+      newSelected.delete(idx)
+    } else {
+      newSelected.add(idx)
+    }
+    setSelectedIndices(newSelected)
+  }
+
+  if (parsedTransactions) {
+    return (
+      <div className="card p-6 mb-6 animate-fade-up border-primary/20 bg-primary/5 space-y-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-border pb-4">
+          <div>
+            <h3 className="text-[16px] font-bold text-foreground flex items-center gap-2">
+              <span className="flex h-2 w-2 rounded-full bg-accent animate-pulse" />
+              Pré-visualização do Extrato
+            </h3>
+            <p className="text-[12px] text-muted mt-0.5">
+              Revise e selecione as transações antes de salvar no sistema.
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleReset} className="btn btn-ghost py-1.5 px-3 text-[12px] flex items-center gap-1.5">
+              <RotateCcw className="h-3.5 w-3.5" /> Enviar outro arquivo
+            </button>
+            <button onClick={onClose} className="btn btn-ghost py-1.5 px-3 text-[12px]">
+              Cancelar
+            </button>
+          </div>
+        </div>
+
+        {/* Dynamic Summary Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="card bg-card-elevated/60 p-4 border-border flex flex-col justify-between min-h-[85px] glow-primary">
+            <span className="text-[11px] text-muted-foreground uppercase font-semibold tracking-wider">A Importar</span>
+            <div className="flex items-baseline justify-between mt-2">
+              <span className="text-[18px] font-bold text-foreground">{totalSelectedCount} <span className="text-[12px] font-normal text-muted-foreground">itens</span></span>
+              <span className={cn("text-[14px] font-bold", totalSelectedAmount >= 0 ? "text-income" : "text-expense")}>
+                {totalSelectedAmount >= 0 ? '+' : ''}{formatCurrency(totalSelectedAmount)}
+              </span>
+            </div>
+          </div>
+          <div className="card bg-card-elevated/60 p-4 border-border flex flex-col justify-between min-h-[85px] glow-income">
+            <span className="text-[11px] text-muted-foreground uppercase font-semibold tracking-wider">Receitas Selecionadas</span>
+            <div className="flex items-baseline justify-between mt-2">
+              <span className="text-[18px] font-bold text-income">{formatCurrency(totalSelectedIncome)}</span>
+            </div>
+          </div>
+          <div className="card bg-card-elevated/60 p-4 border-border flex flex-col justify-between min-h-[85px] glow-expense">
+            <span className="text-[11px] text-muted-foreground uppercase font-semibold tracking-wider">Despesas Selecionadas</span>
+            <div className="flex items-baseline justify-between mt-2">
+              <span className="text-[18px] font-bold text-expense">{formatCurrency(totalSelectedExpense)}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Filter Toolbar */}
+        <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between bg-card/40 p-3 rounded-xl border border-border">
+          {/* Text Search */}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+            <input 
+              type="text" 
+              value={searchQuery} 
+              onChange={(e) => setSearchQuery(e.target.value)} 
+              placeholder="Buscar no extrato..." 
+              className="input input-icon text-[13px] py-1.5"
+            />
+          </div>
+
+          {/* Area/Category Filter */}
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-muted shrink-0 flex items-center gap-1">
+              <Filter className="h-3 w-3" /> Filtro:
+            </span>
+            <select 
+              value={filterType} 
+              onChange={(e: any) => setFilterType(e.target.value)}
+              className="input text-[12px] py-1.5 px-3 w-auto min-w-[170px]"
+            >
+              <option value="no-investments">Ocultar Investimentos (CDB/Poupança)</option>
+              <option value="all">Mostrar Tudo (Todas as Categorias)</option>
+              <option value="investments-only">Apenas Investimentos (CDB)</option>
+              <option value="credits">Apenas Receitas</option>
+              <option value="debits">Apenas Despesas</option>
+            </select>
+          </div>
+
+          {/* Bulk Select actions */}
+          <div className="flex gap-2">
+            <button 
+              onClick={handleSelectAllVisible} 
+              className="btn btn-ghost py-1 px-3 text-[11px] font-medium"
+            >
+              Selecionar Visíveis
+            </button>
+            <button 
+              onClick={handleDeselectAllVisible} 
+              className="btn btn-ghost py-1 px-3 text-[11px] font-medium text-destructive/80 hover:text-destructive hover:bg-destructive/5"
+            >
+              Desmarcar Visíveis
+            </button>
+          </div>
+        </div>
+
+        {/* Checklist Table */}
+        <div className="card overflow-hidden border border-border/80">
+          <div className="max-h-[300px] overflow-y-auto divide-y divide-border">
+            {filteredList.length > 0 ? (
+              filteredList.map((tx) => {
+                const isSelected = selectedIndices.has(tx.idx)
+                const isPositive = tx.amount >= 0
+                const suggested = getSuggestedCategory(tx.description, categories)
+                
+                return (
+                  <div 
+                    key={tx.idx} 
+                    onClick={() => toggleSelectIndex(tx.idx)}
+                    className={cn(
+                      "flex items-center gap-4 px-4 py-3 hover:bg-card-hover transition-colors cursor-pointer select-none",
+                      isSelected ? "bg-primary/5" : "opacity-80"
+                    )}
+                  >
+                    {/* Custom Checkbox */}
+                    <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <input 
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelectIndex(tx.idx)}
+                        className="rounded border-border text-primary focus:ring-primary h-4 w-4 bg-input cursor-pointer"
+                      />
+                    </div>
+
+                    {/* Category Icon */}
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-card-elevated text-sm border border-border">
+                      {suggested?.icon || '📦'}
+                    </div>
+
+                    {/* Description & Category suggestion */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[12px] font-semibold text-foreground truncate">
+                        {tx.description}
+                      </p>
+                      <div className="flex items-center gap-2 mt-0.5 flex-wrap text-[10px] text-muted-foreground">
+                        <span className="text-muted">{formatDate(tx.date)}</span>
+                        <span>•</span>
+                        <span 
+                          className="badge" 
+                          style={{ 
+                            backgroundColor: suggested?.color ? `${suggested.color}15` : 'transparent',
+                            color: suggested?.color || 'var(--color-muted)'
+                          }}
+                        >
+                          {suggested?.name || 'Sem Categoria'}
+                        </span>
+                        {isInternal(tx.description) && (
+                          <span className="badge bg-warning/10 text-warning">
+                            CDB / Interno
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Amount */}
+                    <div className={cn('text-[12px] font-bold shrink-0 min-w-[90px] text-right', isPositive ? 'text-income' : 'text-expense')}>
+                      {isPositive ? '+' : '-'}{formatCurrency(Math.abs(tx.amount))}
+                    </div>
+                  </div>
+                )
+              })
+            ) : (
+              <div className="empty-state p-8 text-center text-muted">
+                <p className="text-[12px]">Nenhuma transação corresponde aos filtros atuais.</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Action Panel */}
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-card-elevated/40 p-4 rounded-xl border border-border">
+          <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
+            <span>Importando para a conta:</span>
+            <strong className="text-foreground">
+              {accountsData?.accounts?.find((a: any) => a.id === accountId)?.institutionName || 'Conta Selecionada'}
+            </strong>
+          </div>
+          
+          <button 
+            onClick={handleConfirmImport} 
+            disabled={loading || totalSelectedCount === 0} 
+            className="btn btn-primary w-full sm:w-auto glow-primary py-2 px-6"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> Processando...
+              </>
+            ) : (
+              <>
+                <Check className="h-4 w-4" /> Importar {totalSelectedCount} Transações
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Phase 1: Upload (existing code styled cleanly)
   return (
     <div className="card p-6 mb-6 animate-fade-up border-primary/20 bg-primary/5">
       <div className="flex items-center justify-between mb-4">
