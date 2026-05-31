@@ -9,7 +9,7 @@ import { toast } from 'sonner'
 export default function GoalsPage() {
   const queryClient = useQueryClient()
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({ name: '', description: '', targetAmount: '', icon: '🎯', color: '#8B5CF6' })
+  const [form, setForm] = useState({ name: '', description: '', targetAmount: '', currentAmount: '', icon: '🎯', color: '#8B5CF6' })
 
   const { data, isLoading } = useQuery({
     queryKey: ['goals'],
@@ -18,9 +18,17 @@ export default function GoalsPage() {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      await fetch('/api/goals', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...form, targetAmount: Number(form.targetAmount) }) })
+      await fetch('/api/goals', { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ 
+          ...form, 
+          targetAmount: Number(form.targetAmount),
+          currentAmount: form.currentAmount ? Number(form.currentAmount) : 0
+        }) 
+      })
     },
-    onSuccess: () => { toast.success('Meta criada!'); queryClient.invalidateQueries({ queryKey: ['goals'] }); setShowForm(false); setForm({ name: '', description: '', targetAmount: '', icon: '🎯', color: '#8B5CF6' }) },
+    onSuccess: () => { toast.success('Meta criada!'); queryClient.invalidateQueries({ queryKey: ['goals'] }); setShowForm(false); setForm({ name: '', description: '', targetAmount: '', currentAmount: '', icon: '🎯', color: '#8B5CF6' }) },
   })
 
   const addValueMutation = useMutation({
@@ -47,8 +55,9 @@ export default function GoalsPage() {
         <div className="card p-5 mb-6 animate-fade-up border-primary/20">
           <p className="text-[13px] font-bold mb-4">Criar Nova Meta</p>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Nome da meta" className="input" />
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Nome da meta" className="input sm:col-span-2" />
             <input type="number" value={form.targetAmount} onChange={(e) => setForm({ ...form, targetAmount: e.target.value })} placeholder="Valor alvo (R$)" className="input" />
+            <input type="number" value={form.currentAmount} onChange={(e) => setForm({ ...form, currentAmount: e.target.value })} placeholder="Valor atual guardado (R$ - opcional)" className="input" />
             <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Descrição (opcional)" className="input sm:col-span-2" />
           </div>
           <div className="mt-3 flex items-center gap-2">
