@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
   const startDate = new Date(year, month - 1, 1)
   const endDate = new Date(year, month, 0, 23, 59, 59, 999)
 
-  const [income, expenses, accounts, categoryBreakdown, dailyFlow, recentTransactions] = await Promise.all([
+  const [income, expenses, accounts, categoryBreakdown, dailyFlow, recentTransactions, goals, budgets] = await Promise.all([
     // Total income
     prisma.transaction.aggregate({
       where: { account: { userId }, date: { gte: startDate, lte: endDate }, amount: { gt: 0 }, status: 'COMPLETED' },
@@ -57,6 +57,18 @@ export async function GET(request: NextRequest) {
       orderBy: { date: 'desc' },
       take: 8,
     }),
+    // Active Goals
+    prisma.goal.findMany({
+      where: { userId, status: 'IN_PROGRESS' },
+      orderBy: { createdAt: 'desc' },
+      take: 3,
+    }),
+    // Budgets for the current period
+    prisma.budget.findMany({
+      where: { userId, month, year },
+      include: { category: true },
+      take: 3,
+    }),
   ])
 
   // Get category details
@@ -90,6 +102,20 @@ export async function GET(request: NextRequest) {
     })
   }
 
+  // Calculate spending on budgets
+  const budgetData = budgets.map(b => {
+    const spentObj = categoryBreakdown.find(cb => cb.categoryId === b.categoryId)
+    const spent = spentObj ? Math.abs(Number(spentObj._sum.amount)) : 0
+    return {
+      id: b.id,
+      categoryName: b.category.name,
+      categoryIcon: b.category.icon,
+      categoryColor: b.category.color,
+      amount: Number(b.amount),
+      spent,
+    }
+  })
+
   const totalIncome = Number(income._sum.amount || 0)
   const totalExpenses = Math.abs(Number(expenses._sum.amount || 0))
   const totalBalance = accounts.reduce((sum, a) => sum + Number(a.balanceAmount), 0)
@@ -104,5 +130,7 @@ export async function GET(request: NextRequest) {
     categoryBreakdown: categoryData,
     dailyCashFlow: dailyData,
     recentTransactions,
+    goals,
+    budgets: budgetData,
   })
 }
